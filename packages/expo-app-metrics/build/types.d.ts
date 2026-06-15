@@ -429,6 +429,24 @@ export interface ExpoAppMetricsModuleType {
      */
     getInactiveSessions(): Promise<DebugSession[]>;
     /**
+     * Reports an unhandled JavaScript error captured by the JS-side `global.ErrorUtils`
+     * handler, recorded natively as an `expo.error.uncaught` log event. Called by
+     * `installErrorHandler`; not intended to be called directly.
+     *
+     * @private This API is unstable and may change without notice.
+     */
+    reportError(error: {
+        name?: string;
+        message: string;
+        stack: {
+            methodName: string;
+            file?: string | null;
+            lineNumber?: number | null;
+            column?: number | null;
+        }[];
+        isFatal: boolean;
+    }): void;
+    /**
      * Simulates a crash report, attributing it to the current main session.
      * Intended for development and debugging only.
      *

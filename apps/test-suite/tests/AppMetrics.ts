@@ -1,5 +1,7 @@
 import { fetch } from 'expo/fetch';
 import AppMetrics, {
+  installErrorHandler,
+  type LogRecord,
   type NetworkRequestCompletedEvent,
   type NetworkRequestFilter,
   type NetworkRequestObserver,
@@ -309,6 +311,67 @@ export function test({ describe, expect, it, beforeAll }) {
           release();
         }
       });
+    });
+  });
+
+  describe('error handler', () => {
+    // `installErrorHandler` ran on import, wrapping `global.ErrorUtils`. These tests drive the
+    // native `reportError` path (what the handler forwards to) end-to-end and read the recorded
+    // `expo.error.uncaught` log back from the main session. We exercise `reportError` directly
+    // rather than dispatching through the live global handler so the test doesn't chain into React
+    // Native's dev red box.
+    async function waitForUncaughtErrorLog(
+      predicate: (log: LogRecord) => boolean,
+      timeoutMs = EVENT_TIMEOUT_MS
+    ): Promise<LogRecord> {
+      const session = AppMetrics.getMainSession();
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const logs = await session.getLogs();
+        const match = logs.find((log) => log.name === 'expo.error.uncaught' && predicate(log));
+        if (match) {
+          return match;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for the expo.error.uncaught log`);
+    }
+
+    it('installs by wrapping the global ErrorUtils handler', () => {
+      expect(typeof installErrorHandler).toBe('function');
+      expect(typeof ErrorUtils.getGlobalHandler()).toBe('function');
+    });
+
+    it('records a fatal error as an expo.error.uncaught log event with its stack', async () => {
+      const message = `test-suite fatal error ${Date.now()}`;
+      AppMetrics.reportError({
+        name: 'TypeError',
+        message,
+        stack: [{ methodName: 'onPress', file: 'index.bundle', lineNumber: 42, column: 7 }],
+        isFatal: true,
+      });
+
+      const log = await waitForUncaughtErrorLog((entry) => entry.body === message);
+      expect(log.severity).toBe('fatal');
+      expect(log.body).toBe(message);
+
+      const attributes = log.attributes ?? {};
+      expect(attributes['expo.error.name']).toBe('TypeError');
+      expect(attributes['expo.error.is_fatal']).toBe(true);
+      expect(Array.isArray(attributes['expo.error.stack'])).toBe(true);
+      const stack = attributes['expo.error.stack'] as { methodName: string; lineNumber: number }[];
+      expect(stack.length).toBe(1);
+      expect(stack[0].methodName).toBe('onPress');
+      expect(stack[0].lineNumber).toBe(42);
+    });
+
+    it('records a non-fatal error at error severity', async () => {
+      const message = `test-suite non-fatal error ${Date.now()}`;
+      AppMetrics.reportError({ message, stack: [], isFatal: false });
+
+      const log = await waitForUncaughtErrorLog((entry) => entry.body === message);
+      expect(log.severity).toBe('error');
+      expect((log.attributes ?? {})['expo.error.is_fatal']).toBe(false);
     });
   });
 }

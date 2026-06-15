@@ -14,6 +14,15 @@ const CRASH_TRIGGERS: { kind: CrashKind; title: string; description: string }[] 
   { kind: 'stackOverflow', title: 'Stack overflow', description: 'Unbounded recursion' },
 ];
 
+// Throws from a timer callback so the error is genuinely uncaught: it unwinds to React Native's
+// global error handler (where expo-app-metrics' handler is chained) instead of being swallowed by
+// the press handler or a React error boundary.
+function triggerUncaughtError() {
+  setTimeout(() => {
+    throw new Error('Intentional uncaught JS error from observe-tester');
+  }, 0);
+}
+
 export function CrashReportsSection() {
   const theme = useTheme();
 
@@ -25,13 +34,19 @@ export function CrashReportsSection() {
     <>
       <Text style={[styles.sectionTitle, { color: theme.text.default }]}>Crash reports</Text>
       <Text style={[styles.sectionHint, { color: theme.text.secondary }]}>
-        Trigger real crashes to produce MetricKit diagnostics, or simulate a crash report attached
-        to the current session.
+        Trigger real crashes to produce MetricKit diagnostics, throw an uncaught JS error to exercise
+        the JavaScript crash handler, or simulate a crash report attached to the current session.
       </Text>
       <Button
         title="Simulate crash report"
         description="Adds a fake crash report to the current session"
         onPress={() => AppMetrics.simulateCrashReport()}
+        theme="secondary"
+      />
+      <Button
+        title="Throw JS error"
+        description="Uncaught JS error captured by the global handler (RedBox in dev)"
+        onPress={triggerUncaughtError}
         theme="secondary"
       />
       {CRASH_TRIGGERS.map(({ kind, title, description }) => (
