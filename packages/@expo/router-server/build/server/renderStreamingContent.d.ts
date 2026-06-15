@@ -27,11 +27,27 @@ export type GetStreamingContentOptions = {
         /** Public href of a favicon generated from `web.favicon` in the app config. */
         favicon?: string;
     };
+    /**
+     * Render output shape, mirroring `web.output` from the Expo app config.
+     * - `'server'` (default): a `ReadableStream<Uint8Array>` for progressive SSR.
+     * - `'static'`: the fully-rendered HTML string, for build-time SSG.
+     */
+    output?: 'static' | 'server';
+    /**
+     * Whether to embed the `__EXPO_ROUTER_HYDRATE__` flag in the bootstrap script. Defaults to
+     * `true`.
+     */
+    hydrate?: boolean;
 };
 /**
  * Streaming SSR renderer using `renderToReadableStream`. Returns a web `ReadableStream`
  * that emits the full HTML document with head injections applied.
  */
-export declare function getStreamingContent(location: URL, options?: GetStreamingContentOptions): Promise<ReadableStream<Uint8Array>>;
+export declare function getStreamingContent(location: URL, options: GetStreamingContentOptions & {
+    output: 'static';
+}): Promise<string>;
+export declare function getStreamingContent(location: URL, options?: GetStreamingContentOptions & {
+    output?: 'server';
+}): Promise<ReadableStream<Uint8Array>>;
 export { resolveMetadata } from './metadata';
 //# sourceMappingURL=renderStreamingContent.d.ts.map
