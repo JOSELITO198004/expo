@@ -1,98 +1,452 @@
----
-title: Introduction to development builds
-sidebar_title: Introduction
-description: Why use development builds and how to get started.
-searchRank: 98
-searchPosition: 1
-hideTOC: true
-hasVideoLink: true
----
+import React, { useState, useEffect } from 'react';
+import { 
+  StyleSheet, Text, View, TouchableOpacity, ScrollView, 
+  TextInput, Alert, Platform 
+} from 'react-native';
+// Librerías de Expo para PDF y Compartir
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+// Iconos nativos
+import { Ionicons } from '@expo/vector-icons';
+// Almacenamiento local nativo
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { BookOpen02Icon } from '@expo/styleguide-icons/outline/BookOpen02Icon';
+// --- BASE DE DATOS DE PRUEBA ---
+const DUMMY_CLIENTS = [
+  { id: 'C001', razonSocial: 'PÚBLICO EN GENERAL', rfc: 'XAXX010101000', ciudad: 'LOCAL', direccion: 'CONOCIDO' },
+  { id: 'C002', razonSocial: 'REFACCIONARIA EL MOTOR', rfc: 'MOT123456789', ciudad: 'CDMX', direccion: 'AV. CENTRAL 123' },
+];
 
-import { BoxLink } from '~/ui/components/BoxLink';
-import { Collapsible } from '~/ui/components/Collapsible';
-import { VideoBoxLink } from '~/ui/components/VideoBoxLink';
+const DUMMY_PRODUCTS = [
+  { sku: 'ACE-001', descripcion: 'ACEITE SINTÉTICO 5W-30', precioLista: 250 },
+  { sku: 'FIL-002', descripcion: 'FILTRO DE AIRE ALTO FLUJO', precioLista: 150 },
+  { sku: 'BUJ-003', descripcion: 'BUJÍA DE IRIDIUM NGK', precioLista: 90 },
+];
 
-**Development build** is the term that we use for a "Debug" build of an app that includes the [`expo-dev-client`](/versions/latest/sdk/dev-client/) library. This library augments the built-in React Native development tooling with additional capabilities, such as support for inspecting network requests and a "launcher" UI that lets you switch between different development servers (such as between a server running on your machine or a teammate's machine) and deployments of your app (such as published updates with EAS Update).
+export default function App() {
+  const [activeTab, setActiveTab] = useState('inicio');
+  
+  // Estados de Datos
+  const [selectedClient, setSelectedClient] = useState(DUMMY_CLIENTS[0]);
+  const [cart, setCart] = useState([]);
+  const [salesHistory, setSalesHistory] = useState([]);
+  const [folioCounter, setFolioCounter] = useState(1);
+  const [tempFolioInput, setTempFolioInput] = useState('1');
 
-<Collapsible summary="Difference between Expo Go and development builds">
+  // Filtros de Informes
+  const [searchClient, setSearchClient] = useState('');
+  const [searchDate, setSearchDate] = useState('');
 
-[Expo Go](https://expo.dev/go) is a playground app for students and learners to get started quickly. It comes with a fixed set of native libraries built in, so you can write JavaScript code and see changes instantly without building a native app yourself. A development build is a fully featured development environment for working on your production-grade Expo apps.
+  // Formateador de moneda
+  const moneyFmt = (val) => '$' + parseFloat(val).toFixed(2).replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1,');
 
-</Collapsible>
+  // Cargar datos al iniciar
+  useEffect(() => {
+    loadData();
+  }, []);
 
-<Collapsible summary="Native app and JavaScript bundle">
+  const loadData = async () => {
+    try {
+      const savedSales = await AsyncStorage.getItem('@sales_history');
+      const savedFolio = await AsyncStorage.getItem('@folio_counter');
+      if (savedSales) setSalesHistory(JSON.parse(savedSales));
+      if (savedFolio) {
+        setFolioCounter(parseInt(savedFolio));
+        setTempFolioInput(savedFolio);
+      }
+    } catch (e) {
+      console.log('Error loading data', e);
+    }
+  };
 
-The **native app** is what you install on your device. Expo Go is a pre-built native app that works like a playground — it can't be changed after you install it. To add new native libraries or change things like your app name and icon, you need to build your own native app (a development build).
+  const saveData = async (sales, folio) => {
+    try {
+      await AsyncStorage.setItem('@sales_history', JSON.stringify(sales));
+      await AsyncStorage.setItem('@folio_counter', folio.toString());
+    } catch (e) {
+      console.log('Error saving data', e);
+    }
+  };
 
-The **JavaScript bundle (`npx expo start`)** is where your app's UI code and business logic are. In production apps, there is one **main.js** bundle that is shipped with the app itself. In development, this JS bundle is live reloaded from your local machine. The main role of React Native is to provide a way for the JavaScript code to access the native APIs (Image, Camera, Notifications, and more). However, only APIs and libraries that were bundled in the **native app** can be used.
+  // --- LÓGICA DEL CARRITO ---
+  const addToCart = (product) => {
+    const existing = cart.find(item => item.sku === product.sku);
+    if (existing) {
+      setCart(cart.map(item => item.sku === product.sku ? { ...item, qty: item.qty + 1 } : item));
+    } else {
+      setCart([...cart, { ...product, qty: 1, discount: 0 }]);
+    }
+    Alert.alert("Agregado", `${product.descripcion} agregado al carrito.`);
+  };
 
-</Collapsible>
+  const clearCart = () => {
+    Alert.alert("Vaciar Carrito", "¿Estás seguro?", [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Vaciar", style: "destructive", onPress: () => setCart([]) }
+    ]);
+  };
 
-<VideoBoxLink
-  videoId="FdjczjkwQKE"
-  title="Expo Go & Development Builds: which should you use?"
-  description="In this tutorial video Beto explains what each of them is, and when to choose a development build."
-/>
+  const getTotals = () => {
+    let subtotal = 0;
+    cart.forEach(item => {
+      subtotal += (item.qty * item.precioLista) * (1 - (item.discount / 100));
+    });
+    return { subtotal, iva: subtotal * 0.16, total: subtotal * 1.16 };
+  };
 
-## Why use a development build (a.k.a what _can't_ you do in Expo Go and why)
+  // --- GENERACIÓN DE PDF NATIVO ---
+  const generateNativePDF = async () => {
+    if (cart.length === 0) {
+      Alert.alert("Error", "El carrito está vacío");
+      return;
+    }
 
-Expo Go is a playground for students and learners to understand the basics of React Native. It's limited and not useful for building production-grade projects, so most apps will convert to using development builds. It helps to know exactly what is _impossible_ in Expo Go and _why_, so you can make an informed decision on when and why to make this move.
+    const d = new Date();
+    const dateStr = `${("0" + d.getDate()).slice(-2)}/${("0" + (d.getMonth() + 1)).slice(-2)}/${d.getFullYear()}`;
+    const timeStr = `${("0" + d.getHours()).slice(-2)}:${("0" + d.getMinutes()).slice(-2)}`;
+    const filterDateISO = `${d.getFullYear()}-${("0" + (d.getMonth() + 1)).slice(-2)}-${("0" + d.getDate()).slice(-2)}`;
+    
+    const currentFolio = `REM-${folioCounter.toString().padStart(4, '0')}`;
+    const { subtotal, iva, total } = getTotals();
 
-<Collapsible summary="Use libraries with native code that aren't in Expo Go">
+    // Guardar en el historial
+    const newSale = {
+      id: Date.now().toString(),
+      folio: currentFolio,
+      clientName: selectedClient.razonSocial,
+      date: dateStr,
+      time: timeStr,
+      filterDate: filterDateISO,
+      total: total,
+      items: cart,
+      status: 'PENDIENTE'
+    };
 
-Consider [`react-native-webview`](/versions/latest/sdk/webview/) as an example, a library that contains native code, but [is included in Expo Go](https://github.com/expo/expo/blob/main/apps/expo-go/package.json#L23). When you run `npx expo install react-native-webview` command in your project, it will install the library in your **node_modules** directory, which includes both the JS code and the native code. But the JS bundle you are building _only_ uses the JS code. Then, your JS bundle gets uploaded to Expo Go, and it interacts with the native code that was already bundled with the app.
+    const updatedSales = [newSale, ...salesHistory];
+    const newFolio = folioCounter + 1;
+    
+    setSalesHistory(updatedSales);
+    setFolioCounter(newFolio);
+    setTempFolioInput(newFolio.toString());
+    saveData(updatedSales, newFolio);
+    
+    // Generar el HTML del recibo
+    let rowsHtml = '';
+    cart.forEach(item => {
+      const rowT = (item.qty * item.precioLista) * (1 - (item.discount / 100));
+      rowsHtml += `
+        <tr>
+          <td style="padding: 8px; border-bottom: 1px solid #ddd;">${item.sku}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #ddd;">${item.descripcion}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: center;">${item.qty}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">${moneyFmt(rowT)}</td>
+        </tr>
+      `;
+    });
 
-Instead, when you try to use a library that is not included, for example, [`react-native-firebase`](/guides/using-firebase/#using-react-native-firebase), then you can use the JS code and hot reload the new bundle into Expo Go but it will immediately error because the JS code tries to call the native code from the React Native Firebase package that does not exist in Expo Go. There is no way to get the native code into the Expo Go app unless it was already included in the bundle that was uploaded to the app stores.
+    const htmlContent = `
+      <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+        </head>
+        <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 20px; color: #333;">
+          <div style="border-bottom: 2px solid #0055A4; padding-bottom: 10px; margin-bottom: 20px;">
+            <h1 style="color: #0055A4; margin: 0; font-size: 28px;">REMISIÓN DE VENTA</h1>
+            <h3 style="margin: 5px 0; color: #555;">Folio: <strong style="color: #000;">${currentFolio}</strong></h3>
+            <p style="margin: 0; font-size: 12px; color: #777;">Fecha: ${dateStr} ${timeStr}</p>
+          </div>
+          <div style="margin-bottom: 20px;">
+            <p style="margin: 0; font-weight: bold; font-size: 16px;">CLIENTE:</p>
+            <p style="margin: 2px 0; font-size: 14px;">${selectedClient.razonSocial}</p>
+            <p style="margin: 2px 0; font-size: 12px; color: #666;">RFC: ${selectedClient.rfc} | Dir: ${selectedClient.direccion}</p>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 30px;">
+            <tr style="background-color: #0055A4; color: white;">
+              <th style="padding: 8px; text-align: left;">SKU</th>
+              <th style="padding: 8px; text-align: left;">Descripción</th>
+              <th style="padding: 8px; text-align: center;">Cant.</th>
+              <th style="padding: 8px; text-align: right;">Importe</th>
+            </tr>
+            ${rowsHtml}
+          </table>
+          <div style="width: 100%; text-align: right;">
+            <p style="margin: 5px 0; font-size: 14px;">Subtotal: <strong>${moneyFmt(subtotal)}</strong></p>
+            <p style="margin: 5px 0; font-size: 14px;">IVA (16%): <strong>${moneyFmt(iva)}</strong></p>
+            <h2 style="margin: 10px 0; color: #0055A4; font-size: 20px;">TOTAL: ${moneyFmt(total)}</h2>
+          </div>
+        </body>
+      </html>
+    `;
 
-</Collapsible>
+    try {
+      // 1. Crear PDF en almacenamiento interno
+      const { uri } = await Print.printToFileAsync({ html: htmlContent });
+      
+      // 2. Compartir nativamente (Abre WhatsApp, Drive, Correo, etc.)
+      if (Platform.OS === 'android' || Platform.OS === 'ios') {
+        await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      }
+      
+      // Limpiar carrito después de compartir
+      setCart([]);
+      setActiveTab('informes');
 
-<Collapsible summary="Test changes in app icon, name, splash screen">
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo generar el PDF.');
+      console.error(error);
+    }
+  };
 
-If you're developing your app in Expo Go only, you can build a store version that will use your provided values and images; it just won't be possible to test it in Expo Go.
+  const updateFolioCounter = () => {
+    const val = parseInt(tempFolioInput);
+    if (!isNaN(val) && val > 0) {
+      setFolioCounter(val);
+      saveData(salesHistory, val);
+      Alert.alert("Actualizado", `El contador iniciará en el folio ${val}`);
+    } else {
+      Alert.alert("Error", "Ingresa un número de folio válido");
+    }
+  };
 
-These native assets are shipped with the native bundle and are immutable once the app is installed. The Expo Go app does show a splash screen, which is your app icon on a solid color background. This is a dev-only emulation to view how the splash screen will probably look. However, it is limited, for example, you cannot test `SplashScreen.setOptions` to animate the splash screen.
+  // --- RENDERIZADO DE PANTALLAS ---
+  const renderInicio = () => (
+    <ScrollView style={styles.screen}>
+      <Text style={styles.sectionTitle}>Acciones Rápidas</Text>
+      <View style={styles.grid}>
+        <TouchableOpacity style={styles.gridCard} onPress={() => setActiveTab('cotizador')}>
+          <Ionicons name="cart" size={32} color="#0055A4" />
+          <Text style={styles.gridText}>Mostrador</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.gridCard} onPress={() => setActiveTab('informes')}>
+          <Ionicons name="stats-chart" size={32} color="#8b5cf6" />
+          <Text style={styles.gridText}>Informes</Text>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
+  );
 
-</Collapsible>
+  const renderCotizador = () => {
+    const { total } = getTotals();
+    return (
+      <View style={{ flex: 1 }}>
+        <ScrollView style={styles.screen}>
+          {/* Header Cotizador */}
+          <View style={styles.quoteHeader}>
+            <Text style={styles.quoteSubtitle}>Cotizando a:</Text>
+            <Text style={styles.quoteTitle}>{selectedClient.razonSocial}</Text>
+            <Text style={styles.quoteTotal}>Total: {moneyFmt(total)}</Text>
+          </View>
 
-<Collapsible summary="Remote push notifications">
+          {/* Buscador Rápido (Simulado con botones para este MVP) */}
+          <Text style={styles.sectionTitle}>Catálogo de Productos</Text>
+          {DUMMY_PRODUCTS.map((prod) => (
+            <TouchableOpacity key={prod.sku} style={styles.productCard} onPress={() => addToCart(prod)}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.prodSku}>{prod.sku}</Text>
+                <Text style={styles.prodDesc}>{prod.descripcion}</Text>
+              </View>
+              <View style={styles.prodPriceBox}>
+                <Text style={styles.prodPrice}>{moneyFmt(prod.precioLista)}</Text>
+                <Ionicons name="add-circle" size={24} color="#0055A4" />
+              </View>
+            </TouchableOpacity>
+          ))}
 
-While [in-app notifications](/versions/latest/sdk/notifications/) are available in Expo Go, remote push notifications (that is, sending a push notification from a server to the app) are not. This is because a push notification service should be tied to your own push notification certificates, and while it is possible to make it work in Expo Go, it often causes confusion for production builds. It is recommended to test remote push notifications in development builds so you can ensure parity in behavior between development and production.
+          <Text style={styles.sectionTitle}>En Carrito ({cart.length})</Text>
+          {cart.length === 0 && <Text style={styles.emptyText}>El carrito está vacío</Text>}
+          {cart.map((item, index) => (
+            <View key={index} style={styles.cartCard}>
+              <Text style={styles.cartSku}>{item.sku} - {item.descripcion}</Text>
+              <Text style={styles.cartDetail}>Cant: {item.qty} | Precio: {moneyFmt(item.precioLista)}</Text>
+            </View>
+          ))}
+          <View style={{ height: 100 }} /> 
+        </ScrollView>
 
-</Collapsible>
+        {/* Botonera Flotante */}
+        <View style={styles.actionFooter}>
+          <TouchableOpacity style={[styles.btnAction, styles.btnDanger]} onPress={clearCart}>
+            <Text style={styles.btnText}>Vaciar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.btnAction, styles.btnPrimary, { flex: 2 }]} onPress={generateNativePDF}>
+            <Ionicons name="share-social" size={18} color="#fff" />
+            <Text style={[styles.btnText, { color: '#fff' }]}> Crear PDF</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
 
-<Collapsible summary="Implementing App/Universal links">
+  const renderInformes = () => {
+    // Filtrado de historial
+    const filteredSales = salesHistory.filter(sale => {
+      const matchClient = sale.clientName.toLowerCase().includes(searchClient.toLowerCase()) || sale.folio.toLowerCase().includes(searchClient.toLowerCase());
+      const matchDate = searchDate ? sale.filterDate === searchDate : true;
+      return matchClient && matchDate;
+    });
 
-Both [Android App Links](/linking/android-app-links/) and [iOS Universal Links](/linking/ios-universal-links/) require a two-way association between the native app and the website. In particular, it requires the native app to include the linked website's URL. This is impossible with Expo Go due to the aforementioned native code immutability.
+    let totalDinero = filteredSales.reduce((acc, curr) => acc + curr.total, 0);
 
-</Collapsible>
+    return (
+      <ScrollView style={styles.screen}>
+        {/* Gestor de Folio */}
+        <View style={styles.card}>
+          <Text style={styles.label}>Configurar Siguiente Folio:</Text>
+          <View style={styles.row}>
+            <TextInput 
+              style={styles.inputFlex} 
+              keyboardType="number-pad"
+              value={tempFolioInput}
+              onChangeText={setTempFolioInput}
+            />
+            <TouchableOpacity style={styles.btnSmall} onPress={updateFolioCounter}>
+              <Text style={{color: 'white', fontWeight: 'bold'}}>FIJAR</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
-<Collapsible summary="Open projects using older SDKs (iOS device only)">
+        {/* Totales */}
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryTitle}>Total Ventas Listadas</Text>
+          <Text style={styles.summaryTotal}>{moneyFmt(totalDinero)}</Text>
+          <Text style={styles.summarySubtitle}>{filteredSales.length} Remisiones</Text>
+        </View>
 
-Expo Go can only support one SDK version at a time. When a new SDK version is released, Expo Go is updated to support the newer version, and this will be the only version of Expo Go available to install from the stores.
+        {/* Buscador y Filtros */}
+        <View style={styles.card}>
+          <Text style={styles.label}>Buscar Cliente o Folio:</Text>
+          <TextInput 
+            style={styles.input} 
+            placeholder="Ej. Público en General"
+            value={searchClient}
+            onChangeText={setSearchClient}
+          />
+          <Text style={[styles.label, {marginTop: 10}]}>Filtrar por Fecha (YYYY-MM-DD):</Text>
+          <TextInput 
+            style={styles.input} 
+            placeholder="Ej. 2026-06-15"
+            value={searchDate}
+            onChangeText={setSearchDate}
+          />
+          {(searchClient !== '' || searchDate !== '') && (
+            <TouchableOpacity style={{marginTop: 10}} onPress={() => {setSearchClient(''); setSearchDate('')}}>
+              <Text style={{color: 'red', textAlign: 'right', fontWeight: 'bold'}}>Limpiar Filtros</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
-If you're developing on an Android Device, Android Emulator, or iOS Simulator, a compatible version of Expo Go can be [downloaded and installed](https://expo.dev/go). The only platform where this is impossible is iPhone devices because Apple does not support side-loading older versions of apps.
+        {/* Lista de Historial */}
+        <Text style={styles.sectionTitle}>Historial de Remisiones</Text>
+        {filteredSales.length === 0 && <Text style={styles.emptyText}>No hay registros.</Text>}
+        {filteredSales.map((sale) => (
+          <View key={sale.id} style={styles.historyCard}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.historyFolio}>{sale.folio}</Text>
+              <Text style={styles.historyDate}>{sale.date}</Text>
+            </View>
+            <Text style={styles.historyClient} numberOfLines={1}>{sale.clientName}</Text>
+            <View style={[styles.rowBetween, { marginTop: 8 }]}>
+              <Text style={styles.historyTotal}>{moneyFmt(sale.total)}</Text>
+              {/* Aquí podrías agregar un botón para re-imprimir el PDF */}
+            </View>
+          </View>
+        ))}
+        <View style={{ height: 80 }} /> 
+      </ScrollView>
+    );
+  };
 
-</Collapsible>
+  return (
+    <View style={styles.container}>
+      {/* App Bar */}
+      <View style={styles.appBar}>
+        <Text style={styles.appBarTitle}>Cotizador Nativo</Text>
+      </View>
 
-<BoxLink
-  title="Expo Go to development build"
-  description="Learn how to migrate an existing Expo Go project to using development builds."
-  href="/develop/development-builds/expo-go-to-dev-build/"
-  Icon={BookOpen02Icon}
-/>
+      {/* Main Content Area */}
+      {activeTab === 'inicio' && renderInicio()}
+      {activeTab === 'cotizador' && renderCotizador()}
+      {activeTab === 'informes' && renderInformes()}
 
-<BoxLink
-  title="Local app development"
-  description="How to build a development client on your local machine."
-  href="/guides/local-app-development"
-  Icon={BookOpen02Icon}
-/>
+      {/* Bottom Navigation */}
+      <View style={styles.bottomNav}>
+        <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab('inicio')}>
+          <Ionicons name="home" size={24} color={activeTab === 'inicio' ? '#0055A4' : '#94a3b8'} />
+          <Text style={[styles.navText, activeTab === 'inicio' && styles.navTextActive]}>Inicio</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab('cotizador')}>
+          <Ionicons name="cart" size={24} color={activeTab === 'cotizador' ? '#0055A4' : '#94a3b8'} />
+          <Text style={[styles.navText, activeTab === 'cotizador' && styles.navTextActive]}>Carrito</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab('informes')}>
+          <Ionicons name="stats-chart" size={24} color={activeTab === 'informes' ? '#0055A4' : '#94a3b8'} />
+          <Text style={[styles.navText, activeTab === 'informes' && styles.navTextActive]}>Informes</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
 
-<BoxLink
-  title="Development builds on EAS"
-  description="How to build a development client on EAS."
-  href="/develop/development-builds/create-a-build/"
-  Icon={BookOpen02Icon}
-/>
+// --- ESTILOS NATIVOS ---
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F1F5F9' },
+  appBar: { backgroundColor: '#0055A4', paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, elevation: 4 },
+  appBarTitle: { color: 'white', fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
+  screen: { flex: 1, padding: 15 },
+  sectionTitle: { fontSize: 16, fontWeight: '900', color: '#1E293B', textTransform: 'uppercase', marginBottom: 10, marginTop: 15 },
+  
+  // Cards
+  grid: { flexDirection: 'row', justifyContent: 'space-between' },
+  gridCard: { flex: 0.48, backgroundColor: 'white', padding: 20, borderRadius: 15, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, elevation: 2 },
+  gridText: { marginTop: 10, fontSize: 12, fontWeight: '800', color: '#1E293B', textTransform: 'uppercase' },
+  card: { backgroundColor: 'white', padding: 15, borderRadius: 15, marginBottom: 15, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, elevation: 2 },
+  
+  // Cotizador
+  quoteHeader: { backgroundColor: '#0055A4', padding: 20, borderRadius: 15, marginBottom: 15 },
+  quoteSubtitle: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase' },
+  quoteTitle: { color: 'white', fontSize: 18, fontWeight: '900', textTransform: 'uppercase', marginBottom: 10 },
+  quoteTotal: { color: 'white', fontSize: 22, fontWeight: '900' },
+  productCard: { backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', elevation: 1 },
+  prodSku: { fontSize: 12, fontWeight: '900', color: '#0055A4' },
+  prodDesc: { fontSize: 10, color: '#64748B', marginTop: 2, paddingRight: 10 },
+  prodPriceBox: { alignItems: 'flex-end' },
+  prodPrice: { fontSize: 14, fontWeight: 'bold', color: '#1E293B', marginBottom: 5 },
+  cartCard: { backgroundColor: 'white', padding: 12, borderRadius: 10, marginBottom: 8, borderLeftWidth: 4, borderLeftColor: '#0055A4' },
+  cartSku: { fontSize: 12, fontWeight: 'bold', color: '#1E293B' },
+  cartDetail: { fontSize: 11, color: '#64748B', marginTop: 4 },
+  
+  // Informes & Historial
+  summaryCard: { backgroundColor: '#0055A4', padding: 20, borderRadius: 15, alignItems: 'center', marginBottom: 15 },
+  summaryTitle: { color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase' },
+  summaryTotal: { color: 'white', fontSize: 28, fontWeight: '900', marginVertical: 5 },
+  summarySubtitle: { color: 'white', fontSize: 12, fontWeight: '500', backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  historyCard: { backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 10, elevation: 1 },
+  historyFolio: { fontSize: 12, fontWeight: '900', color: '#0055A4' },
+  historyDate: { fontSize: 10, color: '#94a3b8', fontWeight: 'bold' },
+  historyClient: { fontSize: 14, fontWeight: '800', color: '#1E293B', marginTop: 5, textTransform: 'uppercase' },
+  historyTotal: { fontSize: 16, fontWeight: '900', color: '#1E293B' },
+  
+  // Formularios
+  label: { fontSize: 10, fontWeight: '900', color: '#64748B', textTransform: 'uppercase', marginBottom: 5 },
+  input: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, padding: 10, fontSize: 14, color: '#1E293B', fontWeight: 'bold' },
+  inputFlex: { flex: 1, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, padding: 10, fontSize: 14, color: '#1E293B', fontWeight: 'bold', marginRight: 10 },
+  row: { flexDirection: 'row', alignItems: 'center' },
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  
+  // Botones
+  btnSmall: { backgroundColor: '#0055A4', paddingHorizontal: 15, paddingVertical: 12, borderRadius: 8 },
+  actionFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', padding: 15, backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 10 },
+  btnAction: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' },
+  btnPrimary: { backgroundColor: '#0055A4' },
+  btnDanger: { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fca5a5' },
+  btnText: { fontSize: 12, fontWeight: '900', textTransform: 'uppercase', color: '#ef4444' },
+
+  // Utilitarios
+  emptyText: { textAlign: 'center', color: '#94a3b8', fontSize: 12, fontWeight: 'bold', marginTop: 20 },
+
+  // Bottom Navigation
+  bottomNav: { flexDirection: 'row', backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingBottom: Platform.OS === 'ios' ? 20 : 5, paddingTop: 10 },
+  navItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  navText: { fontSize: 10, fontWeight: '700', color: '#94a3b8', marginTop: 4 },
+  navTextActive: { color: '#0055A4', fontWeight: '900' },
+});
